@@ -8,6 +8,13 @@ A scalable architecture for a multi-tenant, AI-driven customer support platform 
 - Helps agents resolve faster using AI suggestions and knowledge retrieval
 - Tracks everything in a scalable workflow system
 
+## Architecture Docs
+
+- Scalable architecture: [`docs/SCALABLE_SYSTEM_DESIGN.md`](./docs/SCALABLE_SYSTEM_DESIGN.md)
+- System design diagrams: [`docs/SYSTEM_DESIGN_DIAGRAM.md`](./docs/SYSTEM_DESIGN_DIAGRAM.md)
+- Direct PNG diagram: [`docs/system-design-diagram.png`](./docs/system-design-diagram.png)
+- Ticket lifecycle PNG: [`docs/ticket-lifecycle.png`](./docs/ticket-lifecycle.png)
+
 ---
 
 ## 1. User Management System (RBAC + Multi-Tenant)
