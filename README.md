@@ -15,6 +15,78 @@ A scalable architecture for a multi-tenant, AI-driven customer support platform 
 - Direct PNG diagram: [`docs/system-design-diagram.png`](./docs/system-design-diagram.png)
 - Ticket lifecycle PNG: [`docs/ticket-lifecycle.png`](./docs/ticket-lifecycle.png)
 
+## FastAPI Implementation
+
+Implemented backend (production-style starter) with:
+
+- FastAPI app in `main.py`
+- Async SQLAlchemy setup with generator dependency in `app/core/db.py`
+- Decorator + middleware latency measurement in `app/core/perf.py`
+- Explicit-column SQL queries (no `SELECT *`) in `app/services/ticket_service.py`
+- Advanced Python concurrency:
+  - `ThreadPoolExecutor` for parallel sentiment scoring
+  - `ProcessPoolExecutor` for CPU-bound classification and priority
+  - `asyncio.gather` for concurrent enrichment
+
+### Run
+
+```bash
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
+
+### Main APIs
+
+- `POST /api/v1/tickets`
+- `GET /api/v1/tickets/{ticket_id}`
+- `POST /api/v1/users`
+- `POST /api/v1/users/login`
+- `GET /api/v1/users/{user_id}`
+- `GET /api/v1/users?tenant_id=...&role=...`
+- `GET /api/v1/admin/users` (admin token required)
+- `GET /api/v1/admin/tickets` (admin token required)
+- `GET /api/v1/admin/stats` (admin token required)
+- `GET /api/v1/health`
+
+`POST /api/v1/tickets` now requires `Authorization: Bearer <token>` from login.
+`tenant_id` is auto-generated during user creation from email domain.
+
+Admin bootstrap is loaded from `.env`:
+
+- `admin_email`
+- `admin_password`
+- optional `ADMIN_TENANT_ID` / `admin_tenant_id` (default: `system`)
+
+### Project Structure
+
+```text
+app/
+  core/
+    config.py
+    perf.py
+  database/
+    __init__.py
+    base.py
+    session.py
+  features/
+    agents/
+      models.py
+    tickets/
+      models.py
+      schemas.py
+      service.py
+      router.py
+    users/
+      models.py
+      schemas.py
+      service.py
+      router.py
+      deps.py
+    admin/
+      router.py
+main.py
+```
+
 ---
 
 ## 1. User Management System (RBAC + Multi-Tenant)
