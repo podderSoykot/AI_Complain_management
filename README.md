@@ -41,11 +41,18 @@ uvicorn main:app --reload
 - `GET /api/v1/tickets/{ticket_id}`
 - `POST /api/v1/users`
 - `POST /api/v1/users/login`
+- `POST /api/v1/users/login/admin`
+- `POST /api/v1/users/login/employee`
 - `GET /api/v1/users/{user_id}`
 - `GET /api/v1/users?tenant_id=...&role=...`
 - `GET /api/v1/admin/users` (admin token required)
+- `PATCH /api/v1/admin/users/{user_id}/status` (admin token required)
+- `PATCH /api/v1/admin/users/{user_id}/role` (admin token required)
 - `GET /api/v1/admin/tickets` (admin token required)
 - `GET /api/v1/admin/stats` (admin token required)
+- `POST /api/v1/admin/tickets/{ticket_id}/assign` (admin token required)
+- `POST /api/v1/admin/tickets/{ticket_id}/smart-assign` (admin token required, unique auto-balancer)
+- `GET /api/v1/admin/insights/workload` (admin token required)
 - `GET /api/v1/health`
 
 `POST /api/v1/tickets` now requires `Authorization: Bearer <token>` from login.

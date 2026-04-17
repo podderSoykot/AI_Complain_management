@@ -1,11 +1,48 @@
-*.txt
+# Environment files
+.env
+.env.*
+!.env.example
 
-*.env
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
 
-/venv/
-/docs/
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
 
-#all inside the docs folder
-/docs/*
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
 
-docs/
+# Frontend (Vite / Node)
+node_modules/
+Frontend/node_modules/
+Frontend/dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local runtime files
+*.log
+*.pid

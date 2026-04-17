@@ -1,4 +1,5 @@
-from sqlalchemy import Index, Integer, String, Text
+from datetime import datetime
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database.base import Base
 
@@ -18,4 +19,20 @@ class Ticket(Base):
     __table_args__ = (
         Index("ix_tickets_status_priority", "status", "priority"),
         Index("ix_tickets_category_status", "category", "status"),
+    )
+
+
+class TicketConversation(Base):
+    __tablename__ = "ticket_conversations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.id", ondelete="CASCADE"), index=True)
+    sender_user_id: Mapped[int] = mapped_column(Integer, index=True)
+    sender_role: Mapped[str] = mapped_column(String(30), index=True)
+    message_type: Mapped[str] = mapped_column(String(30), index=True, default="note")
+    message: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    __table_args__ = (
+        Index("ix_ticket_conversations_ticket_created", "ticket_id", "created_at"),
     )

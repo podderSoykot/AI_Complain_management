@@ -30,3 +30,12 @@ async def require_admin(current_user=Depends(get_current_user)):
     if current_user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return current_user
+
+
+async def require_support_or_supervisor(current_user=Depends(get_current_user)):
+    if current_user.role not in {"support_agent", "supervisor"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Support agent or supervisor access required",
+        )
+    return current_user
