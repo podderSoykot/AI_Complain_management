@@ -29,3 +29,11 @@ class UserLogin(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class UserStatusUpdate(BaseModel):
+    is_active: int = Field(ge=0, le=1)
+
+
+class UserRoleUpdate(BaseModel):
+    role: UserRole

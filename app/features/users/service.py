@@ -97,6 +97,27 @@ async def ensure_admin_user(db: AsyncSession) -> None:
     admin_email = settings.admin_email.lower()
     existing = await get_user_by_email(db, admin_email)
     if existing:
+        # Keep admin credentials in sync with .env to avoid stale password issues.
+        user_obj = await db.get(User, existing.id)
+        if user_obj is None:
+            return
+
+        changed = False
+        if user_obj.role != "admin":
+            user_obj.role = "admin"
+            changed = True
+        if user_obj.tenant_id != settings.admin_tenant_id:
+            user_obj.tenant_id = settings.admin_tenant_id
+            changed = True
+        if not verify_password(settings.admin_password, user_obj.password_hash):
+            user_obj.password_hash = hash_password(settings.admin_password)
+            changed = True
+        if user_obj.is_active != 1:
+            user_obj.is_active = 1
+            changed = True
+
+        if changed:
+            await db.commit()
         return
 
     admin_user = User(
@@ -125,3 +146,23 @@ async def list_all_users(db: AsyncSession, limit: int = 100):
         .limit(limit)
     )
     return (await db.execute(stmt)).all()
+
+
+async def update_user_status(db: AsyncSession, user_id: int, is_active: int):
+    user_obj = await db.get(User, user_id)
+    if user_obj is None:
+        return None
+    user_obj.is_active = is_active
+    await db.commit()
+    await db.refresh(user_obj)
+    return user_obj
+
+
+async def update_user_role(db: AsyncSession, user_id: int, role: str):
+    user_obj = await db.get(User, user_id)
+    if user_obj is None:
+        return None
+    user_obj.role = role
+    await db.commit()
+    await db.refresh(user_obj)
+    return user_obj

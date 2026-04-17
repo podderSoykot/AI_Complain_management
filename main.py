@@ -1,5 +1,6 @@
 from sqlalchemy import func, select
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from app.features.tickets.router import router as tickets_router
 from app.features.users.router import router as users_router
@@ -15,6 +16,18 @@ from app.features.users.service import ensure_admin_user
 
 
 app = FastAPI(title="AI Complaint Management API", version="1.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://127.0.0.1:5500",
+        "http://localhost:5500",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.middleware("http")(add_process_time_header)
 app.include_router(tickets_router)
 app.include_router(users_router)
