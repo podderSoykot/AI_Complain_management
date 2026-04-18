@@ -1,21 +1,28 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.session import get_db
 from app.core.perf import timed_endpoint
+from app.core.config import get_settings
 from app.features.tickets.schemas import (
     TicketConversationCreate,
     TicketConversationResponse,
-    TicketCreate,
     TicketResponse,
     TicketStatusUpdateRequest,
+    ticket_response_from_row,
 )
 from app.features.tickets.service import (
     add_ticket_conversation_message,
+    attachment_disk_path,
+    count_attachments,
     create_ticket_enriched,
+    get_attachment_row,
     get_ticket_by_id,
     list_assigned_tickets_for_user,
+    list_attachments_public,
     list_ticket_conversations,
     update_ticket_work_status_by_assignee,
+    user_can_view_ticket_files,
 )
 from app.features.users.deps import get_current_user, require_support_or_supervisor
 
@@ -25,38 +32,46 @@ router = APIRouter(prefix="/api/v1", tags=["tickets"])
 
 @router.post("/tickets", response_model=TicketResponse)
 async def create_ticket(
-    payload: TicketCreate,
+    title: str = Form(..., min_length=3, max_length=160),
+    description: str = Form(..., min_length=10, max_length=4000),
+    files: list[UploadFile] | None = File(None),
     db: AsyncSession = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
-    ticket = await create_ticket_enriched(db, payload.title, payload.description)
-    return TicketResponse(
-        id=ticket.id,
-        title=ticket.title,
-        description=ticket.description,
-        category=ticket.category,
-        priority=ticket.priority,
-        sentiment=ticket.sentiment,
-        status=ticket.status,
-        assignee_id=ticket.assignee_id,
-    )
+    settings = get_settings()
+    uploads = files or []
+    if len(uploads) > settings.ticket_max_files_per_ticket:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many files (max {settings.ticket_max_files_per_ticket})",
+        )
+    file_payloads: list[tuple[str, str, bytes]] = []
+    for uf in uploads:
+        if not uf.filename:
+            continue
+        raw = await uf.read()
+        if len(raw) > settings.ticket_max_upload_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File {uf.filename!r} exceeds max size ({settings.ticket_max_upload_bytes // (1024 * 1024)} MB)",
+            )
+        ct = uf.content_type or "application/octet-stream"
+        file_payloads.append((uf.filename, ct, raw))
 
+    try:
+        ticket = await create_ticket_enriched(
+            db,
+            title.strip(),
+            description.strip(),
+            reporter_id=current_user.id,
+            file_payloads=file_payloads or None,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
-@router.get("/tickets/{ticket_id}", response_model=TicketResponse)
-async def get_ticket(ticket_id: int, db: AsyncSession = Depends(get_db)):
-    row = await get_ticket_by_id(db, ticket_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Ticket not found")
-    return TicketResponse(
-        id=row.id,
-        title=row.title,
-        description=row.description,
-        category=row.category,
-        priority=row.priority,
-        sentiment=row.sentiment,
-        status=row.status,
-        assignee_id=row.assignee_id,
-    )
+    n = await count_attachments(db, ticket.id)
+    atts = await list_attachments_public(db, ticket.id) if n else []
+    return ticket_response_from_row(ticket, attachments=atts)
 
 
 @router.get("/tickets/assigned/me", response_model=list[TicketResponse])
@@ -66,19 +81,52 @@ async def get_my_assigned_tickets(
     current_user=Depends(require_support_or_supervisor),
 ):
     rows = await list_assigned_tickets_for_user(db, assignee_user_id=current_user.id, limit=limit)
-    return [
-        TicketResponse(
-            id=row.id,
-            title=row.title,
-            description=row.description,
-            category=row.category,
-            priority=row.priority,
-            sentiment=row.sentiment,
-            status=row.status,
-            assignee_id=row.assignee_id,
-        )
-        for row in rows
-    ]
+    return [ticket_response_from_row(r) for r in rows]
+
+
+@router.get("/tickets/{ticket_id}", response_model=TicketResponse)
+async def get_ticket(
+    ticket_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    ticket = await get_ticket_by_id(db, ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if not user_can_view_ticket_files(current_user, ticket):
+        raise HTTPException(status_code=403, detail="Not allowed to view this ticket")
+    n = await count_attachments(db, ticket_id)
+    atts = await list_attachments_public(db, ticket_id) if n else []
+    return ticket_response_from_row(ticket, attachments=atts)
+
+
+@router.get("/tickets/{ticket_id}/attachments/{attachment_id}/download")
+async def download_ticket_attachment(
+    ticket_id: int,
+    attachment_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    ticket = await get_ticket_by_id(db, ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if not user_can_view_ticket_files(current_user, ticket):
+        raise HTTPException(status_code=403, detail="Not allowed to download this file")
+
+    row = await get_attachment_row(db, ticket_id, attachment_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    path = attachment_disk_path(row.stored_filename)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="File missing on server")
+
+    return FileResponse(
+        path=str(path),
+        media_type=row.content_type or "application/octet-stream",
+        filename=row.original_filename,
+        content_disposition_type="inline",
+    )
 
 
 @router.patch("/tickets/{ticket_id}/work-status", response_model=TicketResponse)
@@ -105,16 +153,12 @@ async def assignee_update_ticket_work_status(
     if error:
         raise HTTPException(status_code=500, detail="Unable to update ticket status")
 
-    return TicketResponse(
-        id=row.id,
-        title=row.title,
-        description=row.description,
-        category=row.category,
-        priority=row.priority,
-        sentiment=row.sentiment,
-        status=row.status,
-        assignee_id=row.assignee_id,
-    )
+    ticket = await get_ticket_by_id(db, ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    n = await count_attachments(db, ticket_id)
+    atts = await list_attachments_public(db, ticket_id) if n else []
+    return ticket_response_from_row(ticket, attachments=atts)
 
 
 @router.post("/tickets/{ticket_id}/conversations", response_model=TicketConversationResponse)

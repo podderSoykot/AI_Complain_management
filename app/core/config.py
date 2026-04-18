@@ -35,6 +35,9 @@ class Settings(BaseModel):
     database_url: str = _normalize_database_url(
         _get_env("DATABASE_URL", "Database_url", "database_url", default="sqlite+aiosqlite:///./complaints.db")
     )
+    ticket_upload_dir: str = _get_env("TICKET_UPLOAD_DIR", "ticket_upload_dir", default=str(ROOT_DIR / "uploads" / "tickets"))
+    ticket_max_upload_bytes: int = int(_get_env("TICKET_MAX_UPLOAD_BYTES", "ticket_max_upload_bytes", default=str(10 * 1024 * 1024)))
+    ticket_max_files_per_ticket: int = int(_get_env("TICKET_MAX_FILES", "ticket_max_files", default="8"))
     jwt_secret_key: str = _get_env("JWT_SECRET_KEY", "jwt_secret_key", default="change_this_secret")
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60

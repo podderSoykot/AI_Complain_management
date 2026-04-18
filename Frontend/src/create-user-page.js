@@ -27,6 +27,10 @@ app.innerHTML = `
             <option value="admin">Admin</option>
           </select>
         </label>
+        <label>Department
+          <span class="muted">(required for Support Agent & Supervisor)</span>
+          <input id="department" type="text" maxlength="80" placeholder="e.g. Billing, Technical Support" disabled />
+        </label>
         <button type="submit" class="btn btn-primary">Create User</button>
       </form>
       <div id="result" class="result"></div>
@@ -41,14 +45,34 @@ if (!session?.token || session?.role !== "admin") {
   document.querySelector("#result").textContent = "Unauthorized. Please login as admin first.";
 }
 
+const roleSelect = document.querySelector("#role");
+const departmentInput = document.querySelector("#department");
+
+const syncEmployeeFields = () => {
+  const role = roleSelect.value;
+  const isEmployee = role === "support_agent" || role === "supervisor";
+  departmentInput.disabled = !isEmployee;
+  departmentInput.required = isEmployee;
+  if (!isEmployee) {
+    departmentInput.value = "";
+  }
+};
+
+roleSelect.addEventListener("change", syncEmployeeFields);
+syncEmployeeFields();
+
 document.querySelector("#createUserForm").addEventListener("submit", async (e) => {
   e.preventDefault();
+  const role = roleSelect.value;
   const payload = {
     full_name: document.querySelector("#name").value.trim(),
     email: document.querySelector("#email").value.trim(),
     password: document.querySelector("#password").value,
-    role: document.querySelector("#role").value,
+    role,
   };
+  if (role === "support_agent" || role === "supervisor") {
+    payload.department = departmentInput.value.trim();
+  }
   const res = await request("/users", {
     method: "POST",
     headers: authHeaders(),
@@ -57,5 +81,6 @@ document.querySelector("#createUserForm").addEventListener("submit", async (e) =
   document.querySelector("#result").textContent = JSON.stringify(res, null, 2);
   if (res.status >= 200 && res.status < 300) {
     document.querySelector("#createUserForm").reset();
+    syncEmployeeFields();
   }
 });

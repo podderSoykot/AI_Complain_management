@@ -15,6 +15,7 @@ class Ticket(Base):
     sentiment: Mapped[str] = mapped_column(String(30), default="neutral")
     status: Mapped[str] = mapped_column(String(30), index=True, default="open")
     assignee_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    reporter_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
 
     __table_args__ = (
         Index("ix_tickets_status_priority", "status", "priority"),
@@ -36,3 +37,15 @@ class TicketConversation(Base):
     __table_args__ = (
         Index("ix_ticket_conversations_ticket_created", "ticket_id", "created_at"),
     )
+
+
+class TicketAttachment(Base):
+    __tablename__ = "ticket_attachments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.id", ondelete="CASCADE"), index=True)
+    original_filename: Mapped[str] = mapped_column(String(255))
+    stored_filename: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    content_type: Mapped[str] = mapped_column(String(120), default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)

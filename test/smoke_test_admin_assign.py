@@ -23,6 +23,7 @@ def run() -> None:
                 "email": agent_email,
                 "password": "Agent@1234",
                 "role": "support_agent",
+                "department": "Support",
             },
         )
         print("create_agent:", agent_resp.status_code, agent_resp.json())
@@ -48,7 +49,7 @@ def run() -> None:
         customer_headers = {"Authorization": f"Bearer {customer_token}"} if customer_token else {}
         ticket_resp = client.post(
             "/api/v1/tickets",
-            json={
+            data={
                 "title": "Need manual assignment",
                 "description": "Please assign this ticket to a support agent for faster handling.",
             },

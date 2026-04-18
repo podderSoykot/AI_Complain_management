@@ -48,6 +48,20 @@ async def startup():
                 await conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) DEFAULT ''"))
             except Exception:
                 pass
+        try:
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS department VARCHAR(80) DEFAULT ''"))
+        except Exception:
+            try:
+                await conn.execute(text("ALTER TABLE users ADD COLUMN department VARCHAR(80) DEFAULT ''"))
+            except Exception:
+                pass
+        try:
+            await conn.execute(text("ALTER TABLE tickets ADD COLUMN IF NOT EXISTS reporter_id INTEGER"))
+        except Exception:
+            try:
+                await conn.execute(text("ALTER TABLE tickets ADD COLUMN reporter_id INTEGER"))
+            except Exception:
+                pass
 
     # Seed agents once (explicit count query, no SELECT *).
     async with SessionLocal() as session:

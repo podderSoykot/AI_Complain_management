@@ -4,12 +4,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.session import get_db
 from app.features.users.deps import require_admin
 from app.features.users.models import User
-from app.features.users.schemas import UserResponse, UserRoleUpdate, UserStatusUpdate
-from app.features.users.service import list_all_users, update_user_role, update_user_status
+from app.features.users.schemas import UserAdminUpdate, UserResponse, UserRoleUpdate, UserStatusUpdate
+from app.features.users.service import (
+    delete_user_by_admin,
+    list_all_users,
+    update_user_by_admin,
+    update_user_role,
+    update_user_status,
+)
 from app.features.tickets.models import Ticket
-from app.features.tickets.schemas import TicketAssignRequest, TicketResponse
+from app.features.tickets.schemas import (
+    TicketAssignRequest,
+    TicketResponse,
+    TicketRoutingSuggestionResponse,
+    ticket_response_from_row,
+)
 from app.features.tickets.service import (
     assign_ticket_to_user,
+    build_admin_ticket_routing_suggestion,
     close_ticket_by_admin,
     get_employee_workload,
     list_all_tickets,
@@ -34,6 +46,7 @@ async def admin_list_users(
             full_name=row.full_name,
             email=row.email,
             role=row.role,
+            department=row.department or "",
             is_active=row.is_active,
         )
         for row in rows
@@ -47,19 +60,21 @@ async def admin_list_tickets(
     _admin=Depends(require_admin),
 ):
     rows = await list_all_tickets(db, limit=limit)
-    return [
-        TicketResponse(
-            id=row.id,
-            title=row.title,
-            description=row.description,
-            category=row.category,
-            priority=row.priority,
-            sentiment=row.sentiment,
-            status=row.status,
-            assignee_id=row.assignee_id,
-        )
-        for row in rows
-    ]
+    return [ticket_response_from_row(row) for row in rows]
+
+
+@router.get("/tickets/{ticket_id}/routing-suggestion", response_model=TicketRoutingSuggestionResponse)
+async def admin_ticket_routing_suggestion(
+    ticket_id: int,
+    db: AsyncSession = Depends(get_db),
+    _admin=Depends(require_admin),
+):
+    data, error = await build_admin_ticket_routing_suggestion(db, ticket_id=ticket_id)
+    if error == "ticket_not_found":
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if not data:
+        raise HTTPException(status_code=500, detail="Unable to build routing suggestion")
+    return data
 
 
 @router.get("/stats")
@@ -107,16 +122,7 @@ async def admin_assign_ticket(
     if not row:
         raise HTTPException(status_code=500, detail="Unable to assign ticket")
 
-    return TicketResponse(
-        id=row.id,
-        title=row.title,
-        description=row.description,
-        category=row.category,
-        priority=row.priority,
-        sentiment=row.sentiment,
-        status=row.status,
-        assignee_id=row.assignee_id,
-    )
+    return ticket_response_from_row(row)
 
 
 @router.patch("/tickets/{ticket_id}/close", response_model=TicketResponse)
@@ -130,19 +136,15 @@ async def admin_close_ticket(
         raise HTTPException(status_code=404, detail="Ticket not found")
     if error == "ticket_not_resolved":
         raise HTTPException(status_code=400, detail="Only resolved tickets can be closed")
+    if error == "assignee_required_for_close":
+        raise HTTPException(
+            status_code=400,
+            detail="Ticket must be resolved by an assigned employee before admin can close it.",
+        )
     if error:
         raise HTTPException(status_code=500, detail="Unable to close ticket")
 
-    return TicketResponse(
-        id=row.id,
-        title=row.title,
-        description=row.description,
-        category=row.category,
-        priority=row.priority,
-        sentiment=row.sentiment,
-        status=row.status,
-        assignee_id=row.assignee_id,
-    )
+    return ticket_response_from_row(row)
 
 
 @router.post("/tickets/{ticket_id}/smart-assign", response_model=TicketResponse)
@@ -159,16 +161,7 @@ async def admin_smart_assign_ticket(
     if error:
         raise HTTPException(status_code=500, detail="Unable to smart-assign ticket")
 
-    return TicketResponse(
-        id=row.id,
-        title=row.title,
-        description=row.description,
-        category=row.category,
-        priority=row.priority,
-        sentiment=row.sentiment,
-        status=row.status,
-        assignee_id=row.assignee_id,
-    )
+    return ticket_response_from_row(row)
 
 
 @router.patch("/users/{user_id}/status", response_model=UserResponse)
@@ -187,6 +180,7 @@ async def admin_update_user_status(
         full_name=user.full_name,
         email=user.email,
         role=user.role,
+        department=user.department or "",
         is_active=user.is_active,
     )
 
@@ -207,8 +201,59 @@ async def admin_update_user_role(
         full_name=user.full_name,
         email=user.email,
         role=user.role,
+        department=user.department or "",
         is_active=user.is_active,
     )
+
+
+@router.patch("/users/{user_id}", response_model=UserResponse)
+async def admin_update_user(
+    user_id: int,
+    payload: UserAdminUpdate,
+    db: AsyncSession = Depends(get_db),
+    _admin=Depends(require_admin),
+):
+    data = payload.model_dump(exclude_unset=True)
+    if not data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    user, error = await update_user_by_admin(
+        db,
+        user_id,
+        full_name=data.get("full_name"),
+        email=data.get("email"),
+        role=data.get("role"),
+        department=data.get("department"),
+        is_active=data.get("is_active"),
+    )
+    if error == "not_found":
+        raise HTTPException(status_code=404, detail="User not found")
+    if error == "email_taken":
+        raise HTTPException(status_code=400, detail="Email already in use")
+    if not user:
+        raise HTTPException(status_code=500, detail="Unable to update user")
+    return UserResponse(
+        id=user.id,
+        tenant_id=user.tenant_id,
+        full_name=user.full_name,
+        email=user.email,
+        role=user.role,
+        department=user.department or "",
+        is_active=user.is_active,
+    )
+
+
+@router.delete("/users/{user_id}", status_code=204)
+async def admin_delete_user(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_admin),
+):
+    error = await delete_user_by_admin(db, user_id=user_id, admin_user_id=admin.id)
+    if error == "not_found":
+        raise HTTPException(status_code=404, detail="User not found")
+    if error == "cannot_delete_self":
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+    return None
 
 
 @router.get("/insights/workload")

@@ -21,6 +21,7 @@ def run() -> None:
                 "email": emp_email,
                 "password": "Agent@1234",
                 "role": "support_agent",
+                "department": "Billing",
             },
         )
         emp_id = emp_create.json().get("id")
@@ -47,7 +48,7 @@ def run() -> None:
         cust_headers = {"Authorization": f"Bearer {cust_token}"} if cust_token else {}
         ticket_resp = client.post(
             "/api/v1/tickets",
-            json={
+            data={
                 "title": "Need unique smart assignment",
                 "description": "Admin should use smart assignment to select least loaded employee.",
             },
