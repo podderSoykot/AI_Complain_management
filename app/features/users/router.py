@@ -22,6 +22,7 @@ async def create_user_endpoint(payload: UserCreate, db: AsyncSession = Depends(g
         full_name=user.full_name,
         email=user.email,
         role=user.role,
+        department=user.department or "",
         is_active=user.is_active,
     )
 
@@ -68,6 +69,7 @@ async def get_user_endpoint(user_id: int, db: AsyncSession = Depends(get_db)):
         full_name=row.full_name,
         email=row.email,
         role=row.role,
+        department=row.department or "",
         is_active=row.is_active,
     )
 
@@ -87,6 +89,7 @@ async def list_users_endpoint(
             full_name=row.full_name,
             email=row.email,
             role=row.role,
+            department=row.department or "",
             is_active=row.is_active,
         )
         for row in rows

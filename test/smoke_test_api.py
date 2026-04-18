@@ -23,11 +23,11 @@ def run() -> None:
         list_resp = client.get("/api/v1/users", params={"tenant_id": tenant_id, "limit": 10})
         print("list_users:", list_resp.status_code, list_resp.json())
 
-        ticket_payload = {
+        ticket_data = {
             "title": "Payment deducted but service not activated",
             "description": "I paid today and money was deducted but my account is not active yet. This is urgent.",
         }
-        no_auth_ticket = client.post("/api/v1/tickets", json=ticket_payload)
+        no_auth_ticket = client.post("/api/v1/tickets", data=ticket_data)
         print("create_ticket_without_login:", no_auth_ticket.status_code, no_auth_ticket.json())
 
         login_payload = {"email": unique_email, "password": "Rahim@1234"}
@@ -36,7 +36,7 @@ def run() -> None:
 
         token = login_resp.json().get("access_token")
         headers = {"Authorization": f"Bearer {token}"} if token else {}
-        ticket_resp = client.post("/api/v1/tickets", json=ticket_payload, headers=headers)
+        ticket_resp = client.post("/api/v1/tickets", data=ticket_data, headers=headers)
         print("create_ticket_with_login:", ticket_resp.status_code, ticket_resp.json())
 
 

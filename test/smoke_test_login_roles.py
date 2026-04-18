@@ -42,6 +42,7 @@ def run() -> None:
                 "email": emp_email,
                 "password": "Agent@1234",
                 "role": "support_agent",
+                "department": "Operations",
             },
         )
         employee_ok = client.post(

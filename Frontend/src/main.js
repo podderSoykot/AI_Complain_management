@@ -1,4 +1,5 @@
 import "./style.css";
+import { previewTicketAttachment } from "./admin-pages-common.js";
 
 const API_BASE = "http://127.0.0.1:8000/api/v1";
 let accessToken = "";
@@ -77,6 +78,11 @@ document.querySelector("#app").innerHTML = `
             <strong>Authenticated</strong>
           </div>
         </div>
+        <div id="employeeTicketsNavCard" class="employee-overview-actions hidden">
+          <h3>My assigned tickets</h3>
+          <p class="muted">Open the full list of tickets assigned to you (active, resolved, and closed history).</p>
+          <button type="button" id="employeeAssignedTicketsBtn" class="btn btn-primary">Open assigned tickets page</button>
+        </div>
       </section>
 
       <section id="profileSection" class="content-section card hidden">
@@ -90,14 +96,6 @@ document.querySelector("#app").innerHTML = `
           <button type="submit" class="btn btn-secondary">Save Profile (Local)</button>
         </form>
         <div id="profileResult" class="result"></div>
-        <div id="employeeProfilePanel" class="ticket-subpanel hidden">
-          <div class="panel-head">
-            <h3>My Assigned Tickets</h3>
-            <button id="refreshMyTicketsBtn" class="btn btn-ghost">Refresh</button>
-          </div>
-          <p class="muted">Employee can see assigned tickets and work on them.</p>
-          <div id="employeeTicketsResult" class="result large">No data yet.</div>
-        </div>
       </section>
 
       <section id="settingsSection" class="content-section card hidden">
@@ -131,9 +129,18 @@ document.querySelector("#app").innerHTML = `
           <form id="ticketForm" class="form-grid">
             <label>Title<input id="ticketTitle" type="text" required /></label>
             <label>Description<textarea id="ticketDescription" rows="4" required></textarea></label>
+            <label>Supporting documents (optional)
+              <input id="ticketFiles" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt,.csv,.doc,.docx,.xls,.xlsx,image/*" />
+            </label>
+            <p class="muted" style="margin:-4px 0 0;font-size:0.82rem">PDF, images, Word/Excel, or text — up to 8 files, 10 MB each.</p>
             <button type="submit" class="btn btn-primary">Submit Ticket</button>
           </form>
           <div id="ticketResult" class="result"></div>
+        </div>
+        <div id="ticketDocsPanel" class="ticket-subpanel hidden">
+          <h3>Supporting documents</h3>
+          <p class="muted" id="ticketDocsHelp">Open a ticket from “My assigned tickets” or enter an ID below to load files.</p>
+          <ul id="ticketDocsList" class="ticket-docs-list"></ul>
         </div>
         <div id="employeeTools" class="ticket-subpanel hidden">
           <h3>Support Workflow</h3>
@@ -179,6 +186,7 @@ document.querySelector("#app").innerHTML = `
           </form>
           <div class="conversation-actions">
             <button id="loadConversationBtn" class="btn btn-ghost">Load Conversation</button>
+            <button type="button" id="loadTicketDocsBtn" class="btn btn-ghost">Load supporting files</button>
           </div>
           <div id="conversationResult" class="result large"></div>
         </div>
@@ -205,7 +213,7 @@ document.querySelector("#app").innerHTML = `
             <h3>Resolved Waiting for Close</h3>
             <button id="refreshResolvedQueueBtn" class="btn btn-ghost">Refresh</button>
           </div>
-          <p class="muted">Resolved tickets assigned by support/supervisor. Admin can close from here.</p>
+          <p class="muted">Tickets the assigned employee marked <strong>resolved</strong>. Admin can close after review (tickets without an assignee cannot be closed).</p>
           <div id="adminResolvedQueue" class="result large">Loading resolved queue...</div>
         </div>
       </section>
@@ -322,6 +330,7 @@ const renderAdminView = (kind, result, targetOverride = null) => {
           <td>${u.full_name ?? "-"}</td>
           <td>${u.email ?? "-"}</td>
           <td><span class="pill">${u.role ?? "-"}</span></td>
+          <td>${u.department?.trim() ? u.department : "—"}</td>
           <td>${u.tenant_id ?? "-"}</td>
           <td>${u.is_active === 1 ? "Active" : "Inactive"}</td>
         </tr>`
@@ -330,8 +339,8 @@ const renderAdminView = (kind, result, targetOverride = null) => {
     el.innerHTML = `
       <div class="admin-table-wrap">
         <table class="admin-table">
-          <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Tenant</th><th>Status</th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="6">No users found.</td></tr>`}</tbody>
+          <thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Role</th><th>Department</th><th>Tenant</th><th>Status</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="7">No users found.</td></tr>`}</tbody>
         </table>
       </div>
     `;
@@ -368,6 +377,58 @@ const renderAdminView = (kind, result, targetOverride = null) => {
 };
 const authHeaders = () =>
   accessToken ? { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } : { "Content-Type": "application/json" };
+
+const escapeHtml = (s) =>
+  String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+function renderTicketDocsList(ticketId, attachments) {
+  const panel = byId("ticketDocsPanel");
+  const list = byId("ticketDocsList");
+  const help = byId("ticketDocsHelp");
+  if (!panel || !list || !help) return;
+  panel.classList.remove("hidden");
+  const atts = attachments || [];
+  help.textContent = atts.length
+    ? `Ticket #${ticketId} — ${atts.length} supporting file(s). Use View to open here (PDF / image / text).`
+    : `Ticket #${ticketId} — no supporting documents uploaded.`;
+  list.innerHTML = atts.length
+    ? atts
+        .map(
+          (a) =>
+            `<li><span class="ticket-attachment-filename">${escapeHtml(a.original_filename)}</span> <span class="muted">(${(a.size_bytes / 1024).toFixed(1)} KB)</span> <button type="button" class="btn btn-secondary btn-sm ticket-doc-preview" data-tid="${ticketId}" data-aid="${a.id}" data-fn="${encodeURIComponent(a.original_filename)}" data-ct="${encodeURIComponent(a.content_type || "")}">View</button></li>`,
+        )
+        .join("")
+    : "";
+}
+
+async function loadTicketDocsForWork(ticketId) {
+  const result = await request(`/tickets/${ticketId}`, { headers: authHeaders() });
+  if (result.status < 200 || result.status >= 300) {
+    byId("ticketDocsPanel")?.classList.remove("hidden");
+    byId("ticketDocsList").innerHTML = "";
+    byId("ticketDocsHelp").textContent = `Could not load ticket #${ticketId} (HTTP ${result.status}).`;
+    return;
+  }
+  renderTicketDocsList(ticketId, result.data?.attachments || []);
+}
+
+byId("ticketSection")?.addEventListener("click", async (e) => {
+  const btn = e.target.closest(".ticket-doc-preview");
+  if (!btn) return;
+  const tid = Number(btn.dataset.tid);
+  const aid = Number(btn.dataset.aid);
+  const fn = decodeURIComponent(btn.dataset.fn || "file");
+  const ct = decodeURIComponent(btn.dataset.ct || "");
+  try {
+    await previewTicketAttachment(tid, aid, { original_filename: fn, content_type: ct });
+  } catch (err) {
+    showToast(err?.message || "Could not open file", "error");
+  }
+});
 const updateTokenView = () => {
   return;
 };
@@ -442,9 +503,9 @@ const applyRoleUI = () => {
   adminHeaderTabs.forEach((btn) => btn.classList.toggle("hidden", !isAdmin));
   const employeeTools = byId("employeeTools");
   const adminCloseTools = byId("adminCloseTools");
-  const employeeProfilePanel = byId("employeeProfilePanel");
+  const employeeTicketsNavCard = byId("employeeTicketsNavCard");
   if (employeeTools) employeeTools.classList.toggle("hidden", currentLoginType !== "employee");
-  if (employeeProfilePanel) employeeProfilePanel.classList.toggle("hidden", currentLoginType !== "employee");
+  if (employeeTicketsNavCard) employeeTicketsNavCard.classList.toggle("hidden", currentLoginType !== "employee");
   if (adminCloseTools) adminCloseTools.classList.toggle("hidden", !isAdmin);
   if (!isAdmin && byId("adminSection") && !byId("adminSection").classList.contains("hidden")) {
     switchSection("overviewSection");
@@ -479,48 +540,6 @@ const renderConversation = (result) => {
     .join("");
 };
 
-const renderEmployeeAssignedTickets = (result) => {
-  const el = byId("employeeTicketsResult");
-  if (!el) return;
-  if (result.status < 200 || result.status >= 300) {
-    setResult("employeeTicketsResult", result);
-    return;
-  }
-  const tickets = Array.isArray(result.data) ? result.data : [];
-  if (!tickets.length) {
-    el.innerHTML = `<div class="conversation-empty">No tickets assigned to you yet.</div>`;
-    return;
-  }
-  el.innerHTML = `
-    <div class="admin-table-wrap">
-      <table class="admin-table">
-        <thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Priority</th><th>Action</th></tr></thead>
-        <tbody>
-          ${tickets
-            .map(
-              (t) => `
-                <tr>
-                  <td>${t.id}</td>
-                  <td>${t.title ?? "-"}</td>
-                  <td><span class="pill">${t.status ?? "-"}</span></td>
-                  <td>${t.priority ?? "-"}</td>
-                  <td><button class="btn btn-secondary btn-sm ticket-work-btn" data-ticket-id="${t.id}">Work</button></td>
-                </tr>
-              `
-            )
-            .join("")}
-        </tbody>
-      </table>
-    </div>
-  `;
-};
-
-const loadEmployeeAssignedTickets = async () => {
-  if (currentLoginType !== "employee") return;
-  const result = await request("/tickets/assigned/me?limit=200", { headers: authHeaders() });
-  renderEmployeeAssignedTickets(result);
-};
-
 const renderResolvedQueue = (result) => {
   const el = byId("adminResolvedQueue");
   if (!el) return;
@@ -529,11 +548,19 @@ const renderResolvedQueue = (result) => {
     return;
   }
 
-  const resolved = result.data.filter((t) => t.status === "resolved");
+  const resolved = result.data.filter((t) => t.status === "resolved" && t.assignee_id);
   if (!resolved.length) {
-    el.innerHTML = `<div class="conversation-empty">No resolved tickets waiting for close.</div>`;
+    el.innerHTML = `<div class="conversation-empty">No employee-resolved tickets waiting for close.</div>`;
     return;
   }
+
+  const assigneeCell = (t) => {
+    const name = (t.assignee_full_name || "").trim();
+    const dept = (t.assignee_department || "").trim();
+    if (name && dept) return `${name} <span class="muted">(${dept})</span>`;
+    if (name) return name;
+    return `User #${t.assignee_id}`;
+  };
 
   const rows = resolved
     .slice(0, 100)
@@ -543,7 +570,7 @@ const renderResolvedQueue = (result) => {
           <td>${t.id}</td>
           <td>${t.title ?? "-"}</td>
           <td>${t.priority ?? "-"}</td>
-          <td>${t.assignee_id ?? "-"}</td>
+          <td>${assigneeCell(t)}</td>
           <td><span class="pill">resolved</span></td>
           <td><button class="btn btn-danger btn-sm admin-close-ticket-btn" data-ticket-id="${t.id}">Close</button></td>
         </tr>
@@ -554,7 +581,7 @@ const renderResolvedQueue = (result) => {
   el.innerHTML = `
     <div class="admin-table-wrap">
       <table class="admin-table">
-        <thead><tr><th>ID</th><th>Title</th><th>Priority</th><th>Assignee</th><th>Status</th><th>Action</th></tr></thead>
+        <thead><tr><th>ID</th><th>Title</th><th>Priority</th><th>Resolved by (employee)</th><th>Status</th><th>Action</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -664,27 +691,43 @@ byId("loginForm").addEventListener("submit", async (e) => {
     setAuthState(true);
     saveSession();
     startAdminStatsAutoRefresh();
-    loadEmployeeAssignedTickets();
   }
   setResult("loginResult", result);
 });
 
 byId("ticketForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const payload = {
-    title: byId("ticketTitle").value.trim(),
-    description: byId("ticketDescription").value.trim(),
-  };
-  const result = await request("/tickets", {
+  const fd = new FormData();
+  fd.append("title", byId("ticketTitle").value.trim());
+  fd.append("description", byId("ticketDescription").value.trim());
+  const fileInput = byId("ticketFiles");
+  if (fileInput?.files?.length) {
+    for (let i = 0; i < fileInput.files.length; i += 1) {
+      fd.append("files", fileInput.files[i]);
+    }
+  }
+  const res = await fetch(`${API_BASE}/tickets`, {
     method: "POST",
-    headers: authHeaders(),
-    body: JSON.stringify(payload),
+    headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+    body: fd,
   });
+  const data = await res.json().catch(() => ({}));
+  const result = { status: res.status, data };
   byId("ticketResult").textContent = "";
   if (result.status >= 200 && result.status < 300) {
     const ticketId = result.data?.id;
-    showToast(ticketId ? `Ticket created successfully (ID: ${ticketId})` : "Ticket created successfully", "success");
+    const n = result.data?.attachments?.length || 0;
+    showToast(
+      ticketId
+        ? `Ticket #${ticketId} created${n ? ` with ${n} file(s)` : ""}.`
+        : "Ticket created successfully",
+      "success",
+    );
     byId("ticketForm").reset();
+    if (ticketId) {
+      byId("ticketDocsPanel")?.classList.remove("hidden");
+      renderTicketDocsList(ticketId, result.data?.attachments || []);
+    }
   } else {
     showToast("Failed to create ticket. Please try again.", "error");
     setResult("ticketResult", result);
@@ -752,6 +795,15 @@ byId("loadConversationBtn").addEventListener("click", async () => {
   }
   const result = await request(`/tickets/${ticketId}/conversations`, { headers: authHeaders() });
   renderConversation(result);
+});
+
+byId("loadTicketDocsBtn")?.addEventListener("click", async () => {
+  const ticketId = Number(byId("conversationTicketId").value);
+  if (!ticketId) {
+    showToast("Enter a ticket ID first", "error");
+    return;
+  }
+  await loadTicketDocsForWork(ticketId);
 });
 
 byId("adminHeroCreateUser").addEventListener("click", () => {
@@ -822,16 +874,8 @@ byId("settingsForm").addEventListener("submit", (e) => {
   setResult("settingsResult", "Settings saved.");
 });
 
-byId("refreshMyTicketsBtn").addEventListener("click", loadEmployeeAssignedTickets);
-
-byId("employeeTicketsResult").addEventListener("click", (e) => {
-  const btn = e.target.closest(".ticket-work-btn");
-  if (!btn) return;
-  const ticketId = Number(btn.dataset.ticketId);
-  byId("workTicketId").value = ticketId;
-  byId("conversationTicketId").value = ticketId;
-  switchSection("ticketSection");
-  showToast(`Ticket #${ticketId} ready for work`, "success");
+byId("employeeAssignedTicketsBtn")?.addEventListener("click", () => {
+  window.location.href = "/my-assigned-tickets.html";
 });
 
 updateTokenView();
@@ -843,6 +887,18 @@ if (!restored) {
   stopAdminStatsAutoRefresh();
 } else {
   startAdminStatsAutoRefresh();
-  loadEmployeeAssignedTickets();
 }
 switchSection(localStorage.getItem("active_section") || "overviewSection");
+
+const ticketWorkParam = new URLSearchParams(window.location.search).get("ticketWork");
+if (ticketWorkParam && restored) {
+  const tid = Number(ticketWorkParam);
+  if (tid > 0) {
+    byId("workTicketId").value = String(tid);
+    byId("conversationTicketId").value = String(tid);
+    switchSection("ticketSection");
+    void loadTicketDocsForWork(tid);
+    showToast(`Ticket #${tid} loaded for work`, "success");
+  }
+  window.history.replaceState({}, document.title, window.location.pathname);
+}

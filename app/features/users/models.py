@@ -12,6 +12,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(160), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255), default="")
     role: Mapped[str] = mapped_column(String(30), index=True)  # customer|support_agent|admin|supervisor
+    department: Mapped[str] = mapped_column(String(80), default="", server_default="")
     is_active: Mapped[int] = mapped_column(Integer, default=1, index=True)
 
     __table_args__ = (
