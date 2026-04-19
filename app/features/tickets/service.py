@@ -361,6 +361,28 @@ async def get_ticket_by_id(db: AsyncSession, ticket_id: int) -> Ticket | None:
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
+async def get_latest_active_ticket_for_reporter(db: AsyncSession, reporter_id: int) -> Ticket | None:
+    """Newest non-closed ticket this user reported (for one-click agent without typing ID)."""
+    stmt = (
+        select(Ticket)
+        .where(Ticket.reporter_id == reporter_id, Ticket.status != "closed")
+        .order_by(Ticket.id.desc())
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_latest_global_ticket_for_admin_agent(db: AsyncSession) -> Ticket | None:
+    """Newest non-closed ticket overall (admin agent without selecting an ID)."""
+    stmt = (
+        select(Ticket)
+        .where(Ticket.status != "closed")
+        .order_by(Ticket.id.desc())
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
 async def count_attachments(db: AsyncSession, ticket_id: int) -> int:
     stmt = select(func.count()).select_from(TicketAttachment).where(TicketAttachment.ticket_id == ticket_id)
     return int((await db.execute(stmt)).scalar_one() or 0)
@@ -510,6 +532,47 @@ async def mark_ticket_resolved_by_assignee(db: AsyncSession, ticket_id: int, ass
     row = (await db.execute(resolve_stmt)).first()
     await db.commit()
     return row, None
+
+
+async def admin_mark_ticket_resolved(db: AsyncSession, ticket_id: int):
+    """
+    Admin-only: set ticket status to resolved (e.g. AI-assisted closure path).
+    Returns (ticket_row_or_none, error_code, did_transition) where did_transition is True
+    when status changed from a non-resolved state to resolved.
+    """
+    ticket_stmt = (
+        select(Ticket.id, Ticket.status)
+        .where(Ticket.id == ticket_id)
+        .limit(1)
+    )
+    ticket_row = (await db.execute(ticket_stmt)).first()
+    if not ticket_row:
+        return None, "ticket_not_found", False
+    if ticket_row.status == "closed":
+        return None, "ticket_closed", False
+    if ticket_row.status == "resolved":
+        row = await get_ticket_by_id(db, ticket_id)
+        return row, None, False
+
+    resolve_stmt = (
+        update(Ticket)
+        .where(Ticket.id == ticket_id)
+        .values(status="resolved")
+        .returning(
+            Ticket.id,
+            Ticket.title,
+            Ticket.description,
+            Ticket.category,
+            Ticket.priority,
+            Ticket.sentiment,
+            Ticket.status,
+            Ticket.assignee_id,
+            Ticket.reporter_id,
+        )
+    )
+    row = (await db.execute(resolve_stmt)).first()
+    await db.commit()
+    return row, None, True
 
 
 async def close_ticket_by_admin(db: AsyncSession, ticket_id: int):

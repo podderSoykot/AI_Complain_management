@@ -100,3 +100,23 @@ class TicketConversationResponse(BaseModel):
     message_type: str
     message: str
     created_at: datetime
+
+
+class AiAdminChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=8000)
+    apply_resolution: bool = False
+
+
+class AiAdminChatResponse(BaseModel):
+    reply: str
+    resolution_applied: bool = False
+    ticket_id: int | None = None
+
+
+class AiCustomerChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+
+
+class AiCustomerChatResponse(BaseModel):
+    reply: str
+    ticket_id: int | None = None
