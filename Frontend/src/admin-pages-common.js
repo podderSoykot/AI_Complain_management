@@ -1,4 +1,9 @@
-export const API_BASE = "http://127.0.0.1:8000/api/v1";
+const API_ORIGIN =
+  import.meta.env.VITE_API_ORIGIN ??
+  (import.meta.env.DEV
+    ? "http://127.0.0.1:8000"
+    : "https://ai-complain-management.onrender.com");
+export const API_BASE = `${String(API_ORIGIN).replace(/\/$/, "")}/api/v1`;
 export const SESSION_KEY = "acm_session";
 
 export function getSession() {

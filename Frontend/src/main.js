@@ -1,7 +1,5 @@
 import "./style.css";
-import { previewTicketAttachment } from "./admin-pages-common.js";
-
-const API_BASE = "http://127.0.0.1:8000/api/v1";
+import { API_BASE, previewTicketAttachment } from "./admin-pages-common.js";
 let accessToken = "";
 let currentUser = null;
 let currentLoginType = "general";
