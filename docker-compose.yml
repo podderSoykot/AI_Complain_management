@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: complaints
+      POSTGRES_PASSWORD: complaints
+      POSTGRES_DB: complaints
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U complaints -d complaints"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # From host .env via Compose; default targets the `db` service
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://complaints:complaints@db:5432/complaints}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change_me_in_production}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      TICKET_UPLOAD_DIR: ${TICKET_UPLOAD_DIR:-/app/uploads/tickets}
+    volumes:
+      - ticket_uploads:/app/uploads/tickets
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  ticket_uploads:
