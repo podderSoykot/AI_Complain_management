@@ -32,8 +32,8 @@ async def login_endpoint(payload: UserLogin, db: AsyncSession = Depends(get_db))
     user = await authenticate_user(db, str(payload.email), payload.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    token = create_access_token(subject=user.email)
-    return TokenResponse(access_token=token)
+    token = create_access_token(subject=user.email, role=user.role)
+    return TokenResponse(access_token=token, role=user.role)
 
 
 @router.post("/login/admin", response_model=TokenResponse)
@@ -43,8 +43,8 @@ async def admin_login_endpoint(payload: UserLogin, db: AsyncSession = Depends(ge
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin login only")
-    token = create_access_token(subject=user.email)
-    return TokenResponse(access_token=token)
+    token = create_access_token(subject=user.email, role=user.role)
+    return TokenResponse(access_token=token, role=user.role)
 
 
 @router.post("/login/employee", response_model=TokenResponse)
@@ -54,8 +54,8 @@ async def employee_login_endpoint(payload: UserLogin, db: AsyncSession = Depends
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if user.role not in {"support_agent", "supervisor"}:
         raise HTTPException(status_code=403, detail="Employee login allowed for support_agent/supervisor")
-    token = create_access_token(subject=user.email)
-    return TokenResponse(access_token=token)
+    token = create_access_token(subject=user.email, role=user.role)
+    return TokenResponse(access_token=token, role=user.role)
 
 
 @router.get("/{user_id}", response_model=UserResponse)

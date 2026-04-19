@@ -46,6 +46,25 @@ class Settings(BaseModel):
     admin_tenant_id: str = _get_env("ADMIN_TENANT_ID", "admin_tenant_id", default="system")
     max_workers_thread: int = 8
     max_workers_process: int = 2
+    # LLM_MODE: "local" (Ollama / LM Studio OpenAI-compatible) or "api" (OpenAI key).
+    llm_mode: str = _get_env("LLM_MODE", "llm_mode", default="local").strip().lower()
+    local_llm_base_url: str = _get_env(
+        "LOCAL_LLM_BASE_URL",
+        "local_llm_base_url",
+        default="http://127.0.0.1:11434/v1",
+    )
+    local_llm_model: str = _get_env("LOCAL_LLM_MODEL", "local_llm_model", default="llama3.2:3b")
+    local_llm_api_key: str = _get_env("LOCAL_LLM_API_KEY", "local_llm_api_key", default="")
+    local_llm_timeout_seconds: float = float(
+        _get_env("LOCAL_LLM_TIMEOUT_SECONDS", "local_llm_timeout_seconds", default="600")
+    )
+    # Remote OpenAI-compatible Chat Completions (when LLM_MODE=api).
+    openai_api_key: str = _get_env("OPENAI_API_KEY", "openai_api_key", default="")
+    openai_api_base: str = _get_env("OPENAI_API_BASE", "openai_api_base", default="https://api.openai.com/v1")
+    openai_timeout_seconds: float = float(
+        _get_env("OPENAI_TIMEOUT_SECONDS", "openai_timeout_seconds", default="120")
+    )
+    ai_model: str = _get_env("AI_MODEL", "ai_model", default="gpt-4o-mini")
 
 
 @lru_cache(maxsize=1)

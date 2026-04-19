@@ -1,3 +1,4 @@
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,8 +13,12 @@ from app.features.users.service import (
     update_user_role,
     update_user_status,
 )
+from app.features.llm.http_errors import format_llm_http_error
 from app.features.tickets.models import Ticket
+from app.features.tickets.ai_support import run_admin_agent_auto_ticket, run_admin_ticket_ai
 from app.features.tickets.schemas import (
+    AiAdminChatRequest,
+    AiAdminChatResponse,
     TicketAssignRequest,
     TicketResponse,
     TicketRoutingSuggestionResponse,
@@ -61,6 +66,70 @@ async def admin_list_tickets(
 ):
     rows = await list_all_tickets(db, limit=limit)
     return [ticket_response_from_row(row) for row in rows]
+
+
+@router.post("/tickets/{ticket_id}/ai/chat", response_model=AiAdminChatResponse)
+async def admin_ticket_ai_chat(
+    ticket_id: int,
+    payload: AiAdminChatRequest,
+    db: AsyncSession = Depends(get_db),
+    admin=Depends(require_admin),
+):
+    try:
+        out = await run_admin_ticket_ai(
+            db,
+            ticket_id=ticket_id,
+            admin_message=payload.message,
+            apply_resolution=payload.apply_resolution,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"AI provider error: {format_llm_http_error(e)}") from e
+
+    err = out.get("error")
+    if err == "ticket_not_found":
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if err == "conversation_load_failed":
+        raise HTTPException(status_code=500, detail="Unable to load ticket conversation")
+    if err:
+        raise HTTPException(status_code=500, detail="Unable to run admin AI")
+
+    return AiAdminChatResponse(
+        reply=str(out.get("reply") or ""),
+        resolution_applied=bool(out.get("resolution_applied")),
+        ticket_id=ticket_id,
+    )
+
+
+@router.post("/tickets/ai/agent-run", response_model=AiAdminChatResponse)
+async def admin_work_with_agent_auto(
+    db: AsyncSession = Depends(get_db),
+    _admin=Depends(require_admin),
+):
+    """Admin: no ticket ID — runs agent on the newest non-closed ticket in the system."""
+    try:
+        out = await run_admin_agent_auto_ticket(db)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"AI provider error: {format_llm_http_error(e)}") from e
+
+    err = out.get("error")
+    if err == "no_ticket":
+        raise HTTPException(status_code=400, detail="No open ticket found. Create or reopen a ticket first.")
+    if err == "ticket_not_found":
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if err == "conversation_load_failed":
+        raise HTTPException(status_code=500, detail="Unable to load ticket conversation")
+    if err:
+        raise HTTPException(status_code=500, detail="Unable to run agent")
+
+    return AiAdminChatResponse(
+        reply=str(out.get("reply") or ""),
+        resolution_applied=bool(out.get("resolution_applied")),
+        ticket_id=out.get("ticket_id"),
+    )
 
 
 @router.get("/tickets/{ticket_id}/routing-suggestion", response_model=TicketRoutingSuggestionResponse)

@@ -1,10 +1,15 @@
+import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.session import get_db
 from app.core.perf import timed_endpoint
 from app.core.config import get_settings
+from app.features.llm.http_errors import format_llm_http_error
+from app.features.tickets.ai_support import run_customer_agent_auto_ticket, run_customer_ticket_ai
 from app.features.tickets.schemas import (
+    AiCustomerChatRequest,
+    AiCustomerChatResponse,
     TicketConversationCreate,
     TicketConversationResponse,
     TicketResponse,
@@ -84,6 +89,37 @@ async def get_my_assigned_tickets(
     return [ticket_response_from_row(r) for r in rows]
 
 
+@router.post("/tickets/ai/agent-run", response_model=AiCustomerChatResponse)
+async def customer_work_with_agent_auto(
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Customer: no ticket ID — uses your latest non-closed ticket you reported."""
+    if current_user.role != "customer":
+        raise HTTPException(status_code=403, detail="Only customers can use Work with agent")
+    try:
+        out = await run_customer_agent_auto_ticket(db, customer_user_id=current_user.id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"AI provider error: {format_llm_http_error(e)}") from e
+    err = out.get("error")
+    if err == "no_active_ticket":
+        raise HTTPException(
+            status_code=400,
+            detail="No active ticket found. Create a ticket first, or yours may all be closed.",
+        )
+    if err == "ticket_not_found":
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if err == "not_reporter":
+        raise HTTPException(status_code=403, detail="Not allowed for this ticket")
+    if err == "ticket_closed":
+        raise HTTPException(status_code=400, detail="Ticket is closed")
+    if err:
+        raise HTTPException(status_code=500, detail="Unable to run agent")
+    return AiCustomerChatResponse(reply=str(out.get("reply") or ""), ticket_id=out.get("ticket_id"))
+
+
 @router.get("/tickets/{ticket_id}", response_model=TicketResponse)
 async def get_ticket(
     ticket_id: int,
@@ -161,6 +197,38 @@ async def assignee_update_ticket_work_status(
     return ticket_response_from_row(ticket, attachments=atts)
 
 
+@router.post("/tickets/{ticket_id}/ai/customer-chat", response_model=AiCustomerChatResponse)
+async def customer_ticket_ai_chat(
+    ticket_id: int,
+    payload: AiCustomerChatRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if current_user.role != "customer":
+        raise HTTPException(status_code=403, detail="Only customers can use this AI chat")
+    try:
+        out = await run_customer_ticket_ai(
+            db,
+            ticket_id=ticket_id,
+            customer_user_id=current_user.id,
+            customer_message=payload.message,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"AI provider error: {format_llm_http_error(e)}") from e
+    err = out.get("error")
+    if err == "ticket_not_found":
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if err == "not_reporter":
+        raise HTTPException(status_code=403, detail="You can only chat on tickets you created")
+    if err == "ticket_closed":
+        raise HTTPException(status_code=400, detail="Ticket is closed")
+    if err:
+        raise HTTPException(status_code=500, detail="Unable to run AI chat")
+    return AiCustomerChatResponse(reply=str(out.get("reply") or ""), ticket_id=ticket_id)
+
+
 @router.post("/tickets/{ticket_id}/conversations", response_model=TicketConversationResponse)
 async def post_ticket_conversation(
     ticket_id: int,
@@ -168,6 +236,12 @@ async def post_ticket_conversation(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
+    ticket = await get_ticket_by_id(db, ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if not user_can_view_ticket_files(current_user, ticket):
+        raise HTTPException(status_code=403, detail="Not allowed to post on this ticket")
+
     row, error = await add_ticket_conversation_message(
         db,
         ticket_id=ticket_id,
@@ -197,8 +271,14 @@ async def get_ticket_conversation(
     ticket_id: int,
     limit: int = Query(200, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
-    _current_user=Depends(get_current_user),
+    current_user=Depends(get_current_user),
 ):
+    ticket = await get_ticket_by_id(db, ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if not user_can_view_ticket_files(current_user, ticket):
+        raise HTTPException(status_code=403, detail="Not allowed to view this ticket conversation")
+
     rows, error = await list_ticket_conversations(db, ticket_id=ticket_id, limit=limit)
     if error == "ticket_not_found":
         raise HTTPException(status_code=404, detail="Ticket not found")

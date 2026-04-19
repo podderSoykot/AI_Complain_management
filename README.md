@@ -20,13 +20,14 @@ A scalable architecture for a multi-tenant, AI-driven customer support platform 
 Implemented backend (production-style starter) with:
 
 - FastAPI app in `main.py`
-- Async SQLAlchemy setup with generator dependency in `app/core/db.py`
+- Async SQLAlchemy: engine/session in `app/database/session.py`, models on `Base` in `app/database/base.py`
 - Decorator + middleware latency measurement in `app/core/perf.py`
-- Explicit-column SQL queries (no `SELECT *`) in `app/services/ticket_service.py`
-- Advanced Python concurrency:
+- Ticket domain logic and enrichment in `app/features/tickets/service.py` (explicit-column style queries where used)
+- Advanced Python concurrency in ticket enrichment:
   - `ThreadPoolExecutor` for parallel sentiment scoring
   - `ProcessPoolExecutor` for CPU-bound classification and priority
   - `asyncio.gather` for concurrent enrichment
+- OpenAI-compatible chat completions in `app/features/llm/client.py` (local Ollama or remote API)
 
 ### Run
 
@@ -35,34 +36,67 @@ pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
+Optional UI: static/Vite app under `Frontend/` (e.g. `npm install` then `npm run dev` — CORS allows `localhost:5173`).
+
+### Configuration (`.env`)
+
+Copy values into `.env` at the repo root (loaded from `app/core/config.py`).
+
+| Variable | Purpose |
+|----------|---------|
+| `DATABASE_URL` / `database_url` | Postgres (asyncpg) or SQLite (`sqlite+aiosqlite:///...`) |
+| `JWT_SECRET_KEY` | Sign JWTs (change in production) |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Bootstrap admin user on startup |
+| `LLM_MODE` | `local` = Ollama/LM Studio OpenAI-compatible endpoint; `api` = remote key |
+| `LOCAL_LLM_BASE_URL` | Default `http://127.0.0.1:11434/v1` when `LLM_MODE=local` |
+| `LOCAL_LLM_MODEL` | e.g. `llama3.2:3b` (must match `ollama list`) |
+| `LOCAL_LLM_TIMEOUT_SECONDS` | HTTP timeout for local LLM (default `600`; first inference can be slow) |
+| `OPENAI_API_KEY` | Required when `LLM_MODE=api` |
+| `OPENAI_API_BASE`, `AI_MODEL` | Remote base URL and model when using API mode |
+| `OPENAI_TIMEOUT_SECONDS` | HTTP timeout for API mode (default `120`) |
+
+`tenant_id` is auto-generated during user creation from the email domain.
+
 ### Main APIs
 
-- `POST /api/v1/tickets`
+**Tickets** (`Authorization: Bearer` for mutating routes)
+
+- `POST /api/v1/tickets` — create ticket (multipart: title, description, optional files)
 - `GET /api/v1/tickets/{ticket_id}`
-- `POST /api/v1/users`
-- `POST /api/v1/users/login`
-- `POST /api/v1/users/login/admin`
-- `POST /api/v1/users/login/employee`
-- `GET /api/v1/users/{user_id}`
-- `GET /api/v1/users?tenant_id=...&role=...`
-- `GET /api/v1/admin/users` (admin token required)
-- `PATCH /api/v1/admin/users/{user_id}/status` (admin token required)
-- `PATCH /api/v1/admin/users/{user_id}/role` (admin token required)
-- `GET /api/v1/admin/tickets` (admin token required)
-- `GET /api/v1/admin/stats` (admin token required)
-- `POST /api/v1/admin/tickets/{ticket_id}/assign` (admin token required)
-- `POST /api/v1/admin/tickets/{ticket_id}/smart-assign` (admin token required, unique auto-balancer)
-- `GET /api/v1/admin/insights/workload` (admin token required)
+- `GET /api/v1/tickets/assigned/me` — support/supervisor
+- `PATCH /api/v1/tickets/{ticket_id}/work-status` — assignee work status
+- `GET /api/v1/tickets/{ticket_id}/attachments/{attachment_id}/download`
+- `POST/GET /api/v1/tickets/{ticket_id}/conversations` — thread messages
+- `POST /api/v1/tickets/ai/agent-run` — customer “Work with agent” (latest active ticket)
+- `POST /api/v1/tickets/{ticket_id}/ai/customer-chat` — customer AI chat on a ticket
+
+**Users**
+
+- `POST /api/v1/users` — register
+- `POST /api/v1/users/login`, `/login/admin`, `/login/employee`
+- `GET /api/v1/users/{user_id}`, `GET /api/v1/users`
+
+**Admin** (admin token)
+
+- `GET /api/v1/admin/users`, `PATCH .../status`, `PATCH .../role`, `PATCH .../{user_id}`, `DELETE .../{user_id}`
+- `GET /api/v1/admin/tickets`
+- `POST /api/v1/admin/tickets/{ticket_id}/assign`, `POST .../smart-assign`, `PATCH .../close`
+- `GET /api/v1/admin/stats`, `GET /api/v1/admin/insights/workload`
+- `GET /api/v1/admin/tickets/{ticket_id}/routing-suggestion`
+- `POST /api/v1/admin/tickets/{ticket_id}/ai/chat` — admin AI on a ticket
+- `POST /api/v1/admin/tickets/ai/agent-run` — admin “Work with agent” (newest open ticket)
+
+**Health**
+
 - `GET /api/v1/health`
 
-`POST /api/v1/tickets` now requires `Authorization: Bearer <token>` from login.
-`tenant_id` is auto-generated during user creation from email domain.
+### Tests
 
-Admin bootstrap is loaded from `.env`:
+```bash
+pytest -q
+```
 
-- `admin_email`
-- `admin_password`
-- optional `ADMIN_TENANT_ID` / `admin_tenant_id` (default: `system`)
+Live Ollama smoke (skipped if nothing at `127.0.0.1:11434`): `pytest test/test_work_with_agent_live_llm.py -v`.
 
 ### Project Structure
 
@@ -71,18 +105,24 @@ app/
   core/
     config.py
     perf.py
+    security.py
   database/
-    __init__.py
     base.py
     session.py
   features/
     agents/
       models.py
+    llm/
+      client.py
+      config_check.py
+      http_errors.py
+      json_util.py
     tickets/
       models.py
       schemas.py
       service.py
       router.py
+      ai_support.py
     users/
       models.py
       schemas.py
@@ -91,8 +131,13 @@ app/
       deps.py
     admin/
       router.py
+Frontend/
+  (Vite / static UI)
 main.py
+requirements.txt
 ```
+
+The sections below (**1–8** and the narrative walkthrough) describe the **target product vision** and scalability patterns. The **FastAPI Implementation** section above matches what this repository runs today (tickets, users, admin, OpenAI-compatible LLM for ticket AI and “Work with agent”).
 
 ---
 

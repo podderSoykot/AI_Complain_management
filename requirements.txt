@@ -8,3 +8,4 @@ asyncpg
 email-validator
 python-jose[cryptography]
 passlib[bcrypt]
+httpx
