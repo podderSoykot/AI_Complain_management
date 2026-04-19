@@ -8,6 +8,51 @@ A scalable architecture for a multi-tenant, AI-driven customer support platform 
 - Helps agents resolve faster using AI suggestions and knowledge retrieval
 - Tracks everything in a scalable workflow system
 
+## Assignment handover
+
+Use this section to onboard the next maintainer or to submit the project.
+
+### Repository map
+
+| Area | Location |
+|------|----------|
+| FastAPI app | `main.py`, `app/` |
+| Frontend (Vite) | `Frontend/` — build output `Frontend/dist/` |
+| Docker (API + Postgres) | `Dockerfile`, `docker-compose.yml` |
+| Env loading | `app/core/config.py` (reads repo root `.env`) |
+
+### End-user documentation
+
+| Document | Audience |
+|----------|----------|
+| [User guide](./docs/USER_GUIDE.md) | Customers (submit tickets, AI chat, profile) |
+| [Admin & employee guide](./docs/ADMIN_AND_EMPLOYEE_GUIDE.md) | Admins and support staff (agents / supervisors) |
+
+### AI / LLM configuration (required for AI features)
+
+If you see **“AI assistant isn’t configured”** or **`LLM_MODE=api requires OPENAI_API_KEY`**, the backend cannot call an LLM until you set the variables below in **`.env`** (local) or in your host’s environment (Render, Docker, etc.).
+
+| Setup | Set these |
+|-------|-----------|
+| **Local model** (Ollama, LM Studio, or any OpenAI-compatible server) | `LLM_MODE=local`, `LOCAL_LLM_BASE_URL` (e.g. `http://127.0.0.1:11434/v1` for Ollama), `LOCAL_LLM_MODEL` (must match an available model). Optional: `LOCAL_LLM_API_KEY`, `LOCAL_LLM_TIMEOUT_SECONDS`. |
+| **Cloud API** (OpenAI or compatible) | `LLM_MODE=api`, `OPENAI_API_KEY`. Optional: `OPENAI_API_BASE` (default `https://api.openai.com/v1`), `AI_MODEL` (e.g. `gpt-4o-mini`), `OPENAI_TIMEOUT_SECONDS`. |
+
+**Hosted API note:** On Render (or similar), `LLM_MODE=local` with `127.0.0.1` only works if a compatible LLM process runs **in the same container** or you point `LOCAL_LLM_BASE_URL` at a reachable URL. For most cloud deployments, use **`LLM_MODE=api`** and a valid **`OPENAI_API_KEY`**.
+
+Validation logic: `app/features/llm/config_check.py`.
+
+### Deployment checklist (typical)
+
+1. **Backend:** Set `DATABASE_URL`, `JWT_SECRET_KEY`, `ADMIN_EMAIL` / `ADMIN_PASSWORD`, and LLM variables above. CORS in `main.py` must include your frontend origin (e.g. Vercel URL).
+2. **Frontend (Vercel):** Build command `npm run build` from `Frontend/`, output `dist`. Optional env: `VITE_API_ORIGIN` (public API base URL without trailing slash).
+3. **Docker:** `docker compose up --build` — see `docker-compose.yml`; optional `.env` for overrides.
+
+### Health
+
+- `GET /api/v1/health`
+
+---
+
 ## Architecture Docs
 
 - Scalable architecture: [`docs/SCALABLE_SYSTEM_DESIGN.md`](./docs/SCALABLE_SYSTEM_DESIGN.md)
@@ -55,40 +100,148 @@ Copy values into `.env` at the repo root (loaded from `app/core/config.py`).
 | `OPENAI_API_BASE`, `AI_MODEL` | Remote base URL and model when using API mode |
 | `OPENAI_TIMEOUT_SECONDS` | HTTP timeout for API mode (default `120`) |
 
+If the UI or logs show **`LLM_MODE=api requires OPENAI_API_KEY`** or **AI assistant isn’t configured**, see **Assignment handover → AI / LLM configuration** above.
+
 `tenant_id` is auto-generated during user creation from the email domain.
 
-### Main APIs
+### Implemented features (detailed)
 
-**Tickets** (`Authorization: Bearer` for mutating routes)
+The following describes **what this repository actually implements** today: backend (FastAPI), enrichment logic, admin/employee/customer flows, LLM integration, and the Vite frontend.
 
-- `POST /api/v1/tickets` — create ticket (multipart: title, description, optional files)
-- `GET /api/v1/tickets/{ticket_id}`
-- `GET /api/v1/tickets/assigned/me` — support/supervisor
-- `PATCH /api/v1/tickets/{ticket_id}/work-status` — assignee work status
-- `GET /api/v1/tickets/{ticket_id}/attachments/{attachment_id}/download`
-- `POST/GET /api/v1/tickets/{ticket_id}/conversations` — thread messages
-- `POST /api/v1/tickets/ai/agent-run` — customer “Work with agent” (latest active ticket)
-- `POST /api/v1/tickets/{ticket_id}/ai/customer-chat` — customer AI chat on a ticket
+---
 
-**Users**
+#### 1. Platform, security, and observability
 
-- `POST /api/v1/users` — register
-- `POST /api/v1/users/login`, `/login/admin`, `/login/employee`
-- `GET /api/v1/users/{user_id}`, `GET /api/v1/users`
+- **FastAPI** application (`main.py`) with modular routers under `app/features/`.
+- **Async SQLAlchemy** with `AsyncSession` and connection pooling (`app/database/session.py`); supports **SQLite** (default) and **PostgreSQL** via `asyncpg` when `DATABASE_URL` uses the async URL form.
+- **JWT authentication**: access tokens embed subject (email) and role; signed with `JWT_SECRET_KEY` (`app/core/security.py`). Token lifetime is controlled by `access_token_expire_minutes` in settings.
+- **HTTP Bearer** dependency (`get_current_user`) protects routes; separate guards for **admin-only** and **support/supervisor-only** actions (`app/features/users/deps.py`).
+- **CORS** middleware allows configured browser origins (local dev ports and production frontend URLs — adjust `main.py` for new deploy hosts).
+- **Request timing**: middleware adds a processing-time header (`app/core/perf.py`); `/api/v1/health` is wrapped for basic latency visibility.
+- **Startup lifecycle**: on boot, ORM creates tables, applies lightweight compatibility `ALTER`s where needed, seeds **agent** rows if empty, and ensures an **admin** user exists when `ADMIN_EMAIL` / `ADMIN_PASSWORD` are set (`main.py`).
 
-**Admin** (admin token)
+---
 
-- `GET /api/v1/admin/users`, `PATCH .../status`, `PATCH .../role`, `PATCH .../{user_id}`, `DELETE .../{user_id}`
-- `GET /api/v1/admin/tickets`
-- `POST /api/v1/admin/tickets/{ticket_id}/assign`, `POST .../smart-assign`, `PATCH .../close`
-- `GET /api/v1/admin/stats`, `GET /api/v1/admin/insights/workload`
-- `GET /api/v1/admin/tickets/{ticket_id}/routing-suggestion`
-- `POST /api/v1/admin/tickets/{ticket_id}/ai/chat` — admin AI on a ticket
-- `POST /api/v1/admin/tickets/ai/agent-run` — admin “Work with agent” (newest open ticket)
+#### 2. Users, tenants, and authentication
 
-**Health**
+- **Roles** supported in the data model and JWT: `customer`, `support_agent`, `supervisor`, `admin`.
+- **Multi-tenant key**: `tenant_id` is **derived from the email domain** (normalized, e.g. `user@acme.com` → a stable tenant string). This groups users for listing and isolation-style queries.
+- **Registration** (`POST /api/v1/users`): creates a user with hashed password (`passlib` + bcrypt), rejects duplicate emails.
+- **Login variants**:
+  - **General** (`POST /api/v1/users/login`): any active user; returns token + role.
+  - **Admin** (`POST /api/v1/users/login/admin`): same credential check but **403** unless `role == admin` (intended for admin UI flows).
+  - **Employee** (`POST /api/v1/users/login/employee`): **403** unless role is `support_agent` or `supervisor`.
+- **User lookup**: `GET /api/v1/users/{user_id}` returns public profile fields; `GET /api/v1/users?tenant_id=...` lists users in a tenant with optional `role` filter (used for directory-style features).
+- **Bootstrap admin**: if `ADMIN_EMAIL` and `ADMIN_PASSWORD` are configured, startup ensures that account exists (for first-run and demos).
 
-- `GET /api/v1/health`
+---
+
+#### 3. Tickets: data model and workflow
+
+Each **ticket** stores: title, long description, **category**, **priority**, **sentiment**, **status**, optional **assignee** (`assignee_id`), and **reporter** (`reporter_id`). Status values used in code include: `open`, `assigned`, `in_review`, `in_progress`, `resolved`, `closed` (exact transitions depend on assignee and admin actions).
+
+- **Customers** may only see tickets they **reported** (reporter match). **Admins** and **support/supervisor** users can see tickets broadly for operations.
+- **Closing policy**: admin **close** is only allowed for tickets already in a **resolved** state, and the ticket is expected to have been **resolved by an assigned employee** first (enforced in `close_ticket_by_admin`).
+
+---
+
+#### 4. Ticket creation, attachments, and automatic enrichment (non-LLM)
+
+- **Create ticket** (`POST /api/v1/tickets`): **multipart/form-data** with `title` (3–160 chars), `description` (10–4000 chars), optional **multiple file uploads**. Requires authenticated user (typically **customer**). Enforces max **file count** and **per-file size** from environment (`TICKET_MAX_FILES`, `TICKET_MAX_UPLOAD_BYTES`).
+- **Allowed file types** are validated by extension and MIME heuristics (e.g. PDF, common images, office types — see `ALLOWED_ATTACHMENT_SUFFIXES` in `service.py`). Files are stored under `TICKET_UPLOAD_DIR` with a **UUID stored name**; metadata is saved in `ticket_attachments`.
+- **Enrichment pipeline** (`create_ticket_enriched`): after insert, title + description text is analyzed **without** calling an LLM:
+  - **Category** (`classify_text`): keyword/phrase rules in **English and Bangla** — buckets such as **billing**, **account**, **technical**, else **complaint**.
+  - **Sentiment** (`sentiment_score`): heuristic label used for triage.
+  - **Priority** (`priority_score`): combines text signals and sentiment into levels such as **medium**, **high**, **critical**.
+- **Concurrency**: classification and sentiment run in **process/thread pools** (`ProcessPoolExecutor` / `ThreadPoolExecutor`) and are awaited together with `asyncio` to keep the API responsive.
+
+---
+
+#### 5. Ticket conversations and collaboration
+
+- **Threaded messages** (`ticket_conversations`): participants with ticket access can **post** messages with a **message_type** (e.g. notes vs other types supported by the schema) and **list** history (ordered, limit up to 1000). Messages record sender user id and **sender role** for auditing.
+- **AI “sender”** uses a reserved id constant in AI support code when persisting automated lines into the thread (`ai_support.py`).
+
+---
+
+#### 6. Attachments: list and download
+
+- Ticket payloads include **public attachment metadata** (original name, MIME, size, timestamps) without exposing disk paths.
+- **Download** (`GET .../attachments/{attachment_id}/download`) checks **authorization** (`user_can_view_ticket_files`), resolves the stored file, and streams it with appropriate `Content-Type` and `Content-Disposition`.
+
+---
+
+#### 7. Employee (agent / supervisor) features
+
+- **List my assignments** (`GET /api/v1/tickets/assigned/me`): returns tickets assigned to the current **support_agent** or **supervisor**, newest first (limit capped).
+- **Update work status** (`PATCH /api/v1/tickets/{ticket_id}/work-status`): only the **current assignee** may update; valid transitions are validated server-side (e.g. `in_review`, `in_progress`, `resolved` — errors for wrong assignee or already admin-closed tickets). This drives the operational lifecycle before admin closure.
+
+---
+
+#### 8. Admin: user management
+
+- **List all users** (`GET /api/v1/admin/users`) with limit.
+- **Activate/deactivate** (`PATCH .../users/{id}/status`).
+- **Change role** (`PATCH .../users/{id}/role`).
+- **Partial profile update** (`PATCH .../users/{id}`): name, email, role, department, active flag — with **duplicate email** protection.
+- **Delete user** (`DELETE .../users/{id}`): **cannot delete own account** (guardrail).
+
+---
+
+#### 9. Admin: ticket operations and intelligence (non-LLM)
+
+- **List all tickets** for oversight (`GET /api/v1/admin/tickets`).
+- **Manual assign** (`POST .../assign`): assigns to a user id; validates assignee exists, is **active**, and has role **support_agent** or **supervisor**.
+- **Smart assign** (`POST .../smart-assign`): recomputes NLP **category** from ticket text, scores **active employees** by **department match** vs category and by **current active ticket load**, picks a balanced assignee, then assigns. Fails clearly if no eligible employee exists.
+- **Routing suggestion** (`GET .../routing-suggestion`): returns **NLP category**, **human-readable admin guidance** strings per category, a **ranked candidate list** (department fit score, active load, rationale), and a **recommended_user_id** — for UI assistance without auto-assigning.
+- **Close ticket** (`PATCH .../close`): enforces **resolved-by-assignee** and status rules before `closed`.
+- **Statistics** (`GET /api/v1/admin/stats`): aggregate counts — total users, total tickets, open/in-progress buckets vs resolved/closed.
+- **Workload insights** (`GET /api/v1/admin/insights/workload`): per-employee **active ticket counts** (for the statuses used in load calculation), sorted for capacity planning; includes min/max summary fields.
+
+---
+
+#### 10. AI assistant features (LLM required)
+
+All AI routes depend on **valid LLM configuration** (`LLM_MODE`, keys, base URLs — see Assignment handover). The client uses **OpenAI-compatible Chat Completions** (`app/features/llm/client.py`); JSON in replies may be parsed for structured actions.
+
+- **Customer — chat on a ticket** (`POST /api/v1/tickets/{ticket_id}/ai/customer-chat`): customer-only; loads ticket + thread context; returns an assistant reply. Blocks if ticket not owned by reporter or already closed.
+- **Customer — Work with agent (one-click)** (`POST /api/v1/tickets/ai/agent-run`): picks the **latest non-closed ticket reported by this customer** and runs an autonomous-style prompt (summarize, advise next steps). Returns `ticket_id` + reply.
+- **Admin — copilot on a ticket** (`POST /api/v1/admin/tickets/{ticket_id}/ai/chat`): admin message + optional **apply resolution** path; may integrate with ticket resolution logic when the model returns structured signals (`ai_support.py`).
+- **Admin — Work with agent (one-click)** (`POST /api/v1/admin/tickets/ai/agent-run`): targets the **newest non-closed ticket globally** for triage-style assistance.
+
+If configuration is missing, callers see errors such as **`LLM_MODE=api requires OPENAI_API_KEY`** (see `config_check.py`).
+
+---
+
+#### 11. Internal “agents” table (workload / skills)
+
+- On empty database, startup seeds named **agents** with **skills** and **current_load** (`main.py`). Helper logic can pick a **least-loaded** agent by **skill/category** (`_least_loaded_agent_for_category`) for experiments or future routing — **smart assign** in production primarily uses **User** employees and departments as described above.
+
+---
+
+#### 12. Frontend (Vite, multi-page)
+
+- **SPA-style dashboard** (`index.html` + `src/main.js`): login types (**General / Admin / Employee**), sections for **Overview**, **Profile**, **Settings**, **Tickets**, and **Admin** (role-gated), **Work with agent** button when applicable, theme/settings persisted locally where implemented.
+- **Additional pages** built as separate HTML entries (`vite.config.js`): `list-user.html`, `list-ticket.html`, `create-user.html`, `my-assigned-tickets.html` — each bundles its own JS module for admin or employee workflows (tables, refresh, navigation back to dashboard).
+- **API base URL**: development defaults to local API; production build defaults to the deployed API origin unless overridden with **`VITE_API_ORIGIN`** (`src/admin-pages-common.js`).
+
+---
+
+#### 13. Docker and compose
+
+- **Dockerfile** runs **uvicorn** serving `main:app` on port 8000.
+- **docker-compose.yml** provides **PostgreSQL** with healthcheck and an **api** service with persistent volumes for DB data and ticket uploads; environment can be merged from `.env` (see compose file).
+
+---
+
+#### 14. API route index (quick reference)
+
+| Area | Routes |
+|------|--------|
+| Health | `GET /api/v1/health` |
+| Users | `POST /api/v1/users`, `POST .../login`, `.../login/admin`, `.../login/employee`, `GET /api/v1/users/{id}`, `GET /api/v1/users` |
+| Tickets | `POST /api/v1/tickets`, `GET /api/v1/tickets/{id}`, `GET .../assigned/me`, `PATCH .../work-status`, attachment download, conversations GET/POST, customer AI routes |
+| Admin | `GET /api/v1/admin/users`, `GET .../tickets`, assign / smart-assign / close, user PATCH/DELETE, stats, workload, routing-suggestion, admin AI routes |
 
 ### Tests
 
